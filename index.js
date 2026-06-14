@@ -27,15 +27,114 @@ const client = new Client({
   ]
 })
 
-const PANEL_CHANNEL_ID = '1513186544901558382'
+const PANEL_CHANNEL_ID = '1510954258118479944'
 const STATUS_CHANNEL_ID = '1513186569454878731'
 const MAX_SLOTS = 7
+const DEFAULT_MC_PORT = 25565
 
 const registrations = new Map()
 
 function getUserBots(userId) {
   if (!registrations.has(userId)) registrations.set(userId, [])
   return registrations.get(userId)
+}
+
+function parseServerAddress(address) {
+  const cleanAddress = address.trim()
+  if (!cleanAddress) return null
+
+  const lastColonIndex = cleanAddress.lastIndexOf(':')
+
+  if (lastColonIndex > -1 && lastColonIndex === cleanAddress.indexOf(':')) {
+    const ip = cleanAddress.slice(0, lastColonIndex).trim()
+    const portText = cleanAddress.slice(lastColonIndex + 1).trim()
+    const port = Number(portText)
+
+    if (!ip || !Number.isInteger(port) || port < 1 || port > 65535) return null
+    return { ip, port }
+  }
+
+  return {
+    ip: cleanAddress,
+    port: DEFAULT_MC_PORT
+  }
+}
+
+function buildBotModal(customId, title, bot = {}) {
+  const modal = new ModalBuilder()
+    .setCustomId(customId)
+    .setTitle(title)
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId('botName')
+    .setLabel('Bot Username')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+
+  const addressInput = new TextInputBuilder()
+    .setCustomId('botAddress')
+    .setLabel('Server IP / Host')
+    .setPlaceholder('example.com or example.com:12345')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+
+  const command1Input = new TextInputBuilder()
+    .setCustomId('command1')
+    .setLabel('Command 1')
+    .setPlaceholder('/register password password')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+
+  const command2Input = new TextInputBuilder()
+    .setCustomId('command2')
+    .setLabel('Command 2')
+    .setPlaceholder('/login password')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+
+  const shouldMoveInput = new TextInputBuilder()
+    .setCustomId('shouldMove')
+    .setLabel('Bot should move?')
+    .setPlaceholder('Type yes to enable random movement')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+
+  const commands = bot.commands || []
+
+  if (bot.name) nameInput.setValue(bot.name)
+  if (bot.ip) addressInput.setValue(`${bot.ip}:${bot.port}`)
+  if (commands[0]) command1Input.setValue(commands[0])
+  if (commands[1]) command2Input.setValue(commands[1])
+  if (bot.shouldMove) shouldMoveInput.setValue('yes')
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(nameInput),
+    new ActionRowBuilder().addComponents(addressInput),
+    new ActionRowBuilder().addComponents(command1Input),
+    new ActionRowBuilder().addComponents(command2Input),
+    new ActionRowBuilder().addComponents(shouldMoveInput)
+  )
+
+  return modal
+}
+
+function buildAddCommandModal(index) {
+  const modal = new ModalBuilder()
+    .setCustomId(`add_command_modal_${index}`)
+    .setTitle('Add Command')
+
+  const commandInput = new TextInputBuilder()
+    .setCustomId('newCommand')
+    .setLabel('Command')
+    .setPlaceholder('/arena')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(commandInput)
+  )
+
+  return modal
 }
 
 client.on('ready', () => {
@@ -94,29 +193,7 @@ client.on('interactionCreate', async (interaction) => {
         })
       }
 
-      const modal = new ModalBuilder()
-        .setCustomId('register_modal')
-        .setTitle('Register Bot')
-
-      const nameInput = new TextInputBuilder()
-        .setCustomId('botName')
-        .setLabel('Bot Username')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-
-      const addressInput = new TextInputBuilder()
-        .setCustomId('botAddress')
-        .setLabel('Server Address')
-        .setPlaceholder('name.aternos.me:12345')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(nameInput),
-        new ActionRowBuilder().addComponents(addressInput)
-      )
-
-      return interaction.showModal(modal)
+      return interaction.showModal(buildBotModal('register_modal', 'Register Bot'))
     }
 
     if (interaction.customId === 'manage') {
@@ -155,7 +232,11 @@ client.on('interactionCreate', async (interaction) => {
 
       const text = bots.map((bot, index) => {
         const state = bot.bot ? 'Online' : 'Offline'
-        return `Slot ${index + 1}: ${bot.name}\nServer: ${bot.ip}:${bot.port}\nStatus: ${state}`
+        const commands = bot.commands && bot.commands.length
+          ? bot.commands.map((cmd, cmdIndex) => `${cmdIndex + 1}. ${cmd}`).join('\n')
+          : 'No commands saved'
+
+        return `Slot ${index + 1}: ${bot.name}\nServer: ${bot.ip}:${bot.port}\nStatus: ${state}\nRandom Movement: ${bot.shouldMove ? 'Yes' : 'No'}\nCommands:\n${commands}`
       }).join('\n\n')
 
       return interaction.reply({
@@ -166,7 +247,6 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.customId === 'delete_all') {
       for (const bot of bots) cleanupBot(bot)
-
       registrations.set(userId, [])
 
       return interaction.reply({
@@ -258,31 +338,21 @@ client.on('interactionCreate', async (interaction) => {
         })
       }
 
-      const modal = new ModalBuilder()
-        .setCustomId(`edit_modal_${index}`)
-        .setTitle('Edit Registration')
+      return interaction.showModal(buildBotModal(`edit_modal_${index}`, 'Edit Registration', bot))
+    }
 
-      const nameInput = new TextInputBuilder()
-        .setCustomId('botName')
-        .setLabel('Bot Username')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setValue(bot.name)
+    if (interaction.customId.startsWith('addcmd_')) {
+      const index = Number(interaction.customId.split('_')[1])
+      const bot = bots[index]
 
-      const addressInput = new TextInputBuilder()
-        .setCustomId('botAddress')
-        .setLabel('Server Address')
-        .setPlaceholder('name.aternos.me:12345')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setValue(`${bot.ip}:${bot.port}`)
+      if (!bot) {
+        return interaction.reply({
+          content: 'That registration no longer exists.',
+          ephemeral: true
+        })
+      }
 
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(nameInput),
-        new ActionRowBuilder().addComponents(addressInput)
-      )
-
-      return interaction.showModal(modal)
+      return interaction.showModal(buildAddCommandModal(index))
     }
   }
 
@@ -318,13 +388,22 @@ client.on('interactionCreate', async (interaction) => {
         .setStyle(ButtonStyle.Primary),
 
       new ButtonBuilder()
+        .setCustomId(`addcmd_${index}`)
+        .setLabel('+ Add Cmd')
+        .setStyle(ButtonStyle.Secondary),
+
+      new ButtonBuilder()
         .setCustomId(`delete_${index}`)
         .setLabel('Delete')
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(ButtonStyle.Danger)
     )
 
+    const commands = bot.commands && bot.commands.length
+      ? bot.commands.map((cmd, cmdIndex) => `${cmdIndex + 1}. ${cmd}`).join('\n')
+      : 'No commands saved'
+
     return interaction.reply({
-      content: `Selected slot ${index + 1}: ${bot.name}\nServer: ${bot.ip}:${bot.port}\nStatus: ${bot.bot ? 'Online' : 'Offline'}`,
+      content: `Selected slot ${index + 1}: ${bot.name}\nServer: ${bot.ip}:${bot.port}\nStatus: ${bot.bot ? 'Online' : 'Offline'}\nRandom Movement: ${bot.shouldMove ? 'Yes' : 'No'}\nCommands:\n${commands}`,
       components: [row],
       ephemeral: true
     })
@@ -334,10 +413,42 @@ client.on('interactionCreate', async (interaction) => {
     const userId = interaction.user.id
     const bots = getUserBots(userId)
 
+    if (interaction.customId.startsWith('add_command_modal_')) {
+      const index = Number(interaction.customId.split('_')[3])
+      const bot = bots[index]
+
+      if (!bot) {
+        return interaction.reply({
+          content: 'That registration no longer exists.',
+          ephemeral: true
+        })
+      }
+
+      const newCommand = interaction.fields.getTextInputValue('newCommand').trim()
+
+      if (!newCommand) {
+        return interaction.reply({
+          content: 'Command cannot be empty.',
+          ephemeral: true
+        })
+      }
+
+      if (!bot.commands) bot.commands = []
+      bot.commands.push(newCommand)
+
+      return interaction.reply({
+        content: `Added command ${bot.commands.length}: ${newCommand}`,
+        ephemeral: true
+      })
+    }
+
     const name = interaction.fields.getTextInputValue('botName').trim()
     const address = interaction.fields.getTextInputValue('botAddress').trim()
-    const [ip, portText] = address.split(':')
-    const port = Number(portText)
+    const command1 = interaction.fields.getTextInputValue('command1').trim()
+    const command2 = interaction.fields.getTextInputValue('command2').trim()
+    const shouldMoveText = interaction.fields.getTextInputValue('shouldMove').trim()
+    const shouldMove = shouldMoveText.toLowerCase() === 'yes'
+    const parsedAddress = parseServerAddress(address)
 
     if (!name) {
       return interaction.reply({
@@ -346,12 +457,15 @@ client.on('interactionCreate', async (interaction) => {
       })
     }
 
-    if (!ip || !Number.isInteger(port)) {
+    if (!parsedAddress) {
       return interaction.reply({
-        content: 'Invalid address. Use this format: name.aternos.me:12345',
+        content: 'Server address cannot be empty. You can use a host, IP, or host:port.',
         ephemeral: true
       })
     }
+
+    const { ip, port } = parsedAddress
+    const commands = [command1, command2].filter(Boolean)
 
     if (interaction.customId === 'register_modal') {
       if (bots.length >= MAX_SLOTS) {
@@ -365,6 +479,8 @@ client.on('interactionCreate', async (interaction) => {
         name,
         ip,
         port,
+        commands,
+        shouldMove,
         bot: null,
         afkInterval: null,
         movementTimeout: null,
@@ -373,7 +489,7 @@ client.on('interactionCreate', async (interaction) => {
       })
 
       return interaction.reply({
-        content: `Registered slot ${bots.length}.\nName: ${name}\nServer: ${ip}:${port}`,
+        content: `Registered slot ${bots.length}.\nName: ${name}\nServer: ${ip}:${port}\nRandom Movement: ${shouldMove ? 'Yes' : 'No'}`,
         ephemeral: true
       })
     }
@@ -394,9 +510,11 @@ client.on('interactionCreate', async (interaction) => {
       bot.name = name
       bot.ip = ip
       bot.port = port
+      bot.commands = commands.concat((bot.commands || []).slice(2))
+      bot.shouldMove = shouldMove
 
       return interaction.reply({
-        content: `Updated slot ${index + 1}.\nName: ${name}\nServer: ${ip}:${port}`,
+        content: `Updated slot ${index + 1}.\nName: ${name}\nServer: ${ip}:${port}\nRandom Movement: ${shouldMove ? 'Yes' : 'No'}`,
         ephemeral: true
       })
     }
@@ -527,23 +645,7 @@ function startBot(registration) {
       }
     } catch {}
 
-    setTimeout(() => {
-      if (!registration.bot || registration.bot !== bot) return
-
-      bot.chat('/register pass123 pass123')
-
-      setTimeout(() => {
-        if (!registration.bot || registration.bot !== bot) return
-
-        bot.chat('/login pass123')
-
-        setTimeout(() => {
-          if (!registration.bot || registration.bot !== bot) return
-
-          startRandomMovement(registration, bot)
-        }, 2000)
-      }, 2000)
-    }, 3000)
+    runStartupCommands(registration, bot)
   })
 
   const handleDisconnect = async (reason) => {
@@ -572,6 +674,33 @@ function startBot(registration) {
   bot.on('kicked', handleDisconnect)
   bot.on('error', handleDisconnect)
   bot.on('end', handleDisconnect)
+}
+
+function runStartupCommands(registration, bot) {
+  const commands = registration.commands || []
+
+  const runCommand = (index) => {
+    if (!registration.bot || registration.bot !== bot) return
+
+    if (index >= commands.length) {
+      if (registration.shouldMove) {
+        startRandomMovement(registration, bot)
+      } else {
+        stopRandomMovement(registration)
+      }
+      return
+    }
+
+    bot.chat(commands[index])
+
+    setTimeout(() => {
+      runCommand(index + 1)
+    }, 2000)
+  }
+
+  setTimeout(() => {
+    runCommand(0)
+  }, 3000)
 }
 
 function formatReason(reason) {
